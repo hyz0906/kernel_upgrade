@@ -1,4 +1,5 @@
 from typing import Any, Dict
+import os
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -16,46 +17,63 @@ retriever = CocciRetriever()
 def retrieve_knowledge(state: AgentState) -> Dict[str, Any]:
     """Query VectorDB for similar .cocci patterns"""
     print(f"Retrieving knowledge for: {state['user_request']}")
-    docs = retriever.retrieve(state['user_request'])
+    # Use structured retrieval to get syntax rules and examples separately
+    docs = retriever.retrieve_structured(state['user_request'])
     return {"retrieved_docs": docs}
 
 def draft_script(state: AgentState) -> Dict[str, Any]:
     """Architect Agent generates V1 script based on docs"""
     print("Drafting Coccinelle script...")
     
-    system_prompt = """You are a Senior Linux Kernel Engineer specializing in Coccinelle Semantic Patch Language (SmPL).
-Your Goal: Write a `.cocci` script to automate a kernel refactoring task.
+    # Load system prompt from file
+    try:
+        with open("system_prompt.md", "r") as f:
+            system_prompt = f.read()
+    except FileNotFoundError:
+        # Fallback if file not found (though it should exist)
+        print("Warning: system_prompt.md not found, using default.")
+        system_prompt = """You are a Senior Linux Kernel Engineer specializing in Coccinelle Semantic Patch Language (SmPL)."""
 
-### STRICT RULES (SmPL != C):
-1.  **Do NOT act like a C Compiler.** SmPL is a pattern matching language.
-2.  **Metavariables are King:** You MUST declare all metavariables between `@@` and `@@` before using them.
-    - `expression E;` matches specific values.
-    - `identifier f;` matches function/variable names.
-    - `type T;` matches data types.
-3.  **The "..." Operator:** - Use `...` to match arbitrary code execution paths.
-    - Use `<... ...>` for code that might execute multiple times (loops/nesting).
-4.  **Handling Context:** Do not write surrounding code unless it is required for disambiguation.
-
-### RAG CONTEXT:
-Here are similar patterns from the Linux Kernel codebase:
-{retrieved_docs}
-
-### WORKFLOW:
-1.  **Analyze**: Breakdown the transform logic (What is removed? What is added?).
-2.  **Define**: List necessary metavariables.
-3.  **Draft**: Write the full `.cocci` script.
-    
-Output ONLY the code block for the .cocci script.
-"""
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
         ("user", "User Request: {user_request}")
     ])
     
+    # Format the retrieved docs for the prompt
+    # The system prompt expects specific sections or we can append them
+    # But wait, the system prompt in the file has placeholders? 
+    # Let's check system_prompt.md content again.
+    # It says: "You have access to two distinct knowledge sources via RAG retrieval."
+    # It doesn't seem to have {retrieved_docs} placeholder.
+    # So we should probably inject the context into the user message or append to system prompt.
+    # However, to be safe and follow the plan, let's inject it into the prompt variables.
+    
+    # Actually, let's look at the system_prompt.md content I read earlier.
+    # It describes how to use the knowledge, but doesn't explicitly have a {retrieved_docs} placeholder.
+    # I should probably append the context to the system prompt or pass it as a variable if I modify the system prompt to include it.
+    
+    # Let's assume I need to inject it. I will modify the system prompt string in memory to include the context.
+    
+    retrieved_docs = state['retrieved_docs']
+    context_str = f"""
+### RAG CONTEXT - SYNTAX & RULES:
+{retrieved_docs.get('syntax_rules', '')}
+
+### RAG CONTEXT - HISTORICAL EXAMPLES:
+{retrieved_docs.get('examples', '')}
+"""
+    
+    # Append context to the system prompt
+    final_system_prompt = system_prompt + "\n" + context_str
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", final_system_prompt),
+        ("user", "User Request: {user_request}")
+    ])
+    
     chain = prompt | llm | StrOutputParser()
     response = chain.invoke({
-        "user_request": state['user_request'], 
-        "retrieved_docs": "\n\n".join(state['retrieved_docs'])
+        "user_request": state['user_request']
     })
     
     # Extract code block if present
