@@ -12,7 +12,10 @@ dependencies = [
     "chromadb",
     "mcp",
     "pytest",
-    "pydantic"
+    "pydantic",
+    "fastapi",
+    "uvicorn",
+    "GitPython"
 ]
 
 [project.scripts]
