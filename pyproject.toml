@@ -1,0 +1,19 @@
+[project]
+name = "lk-spg-agent"
+version = "0.1.0"
+description = "Linux Kernel Semantic Patch Generator Agent"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "langgraph",
+    "langchain",
+    "langchain-openai",
+    "langchain-anthropic",
+    "chromadb",
+    "mcp",
+    "pytest",
+    "pydantic"
+]
+
+[project.scripts]
+lk-spg-server = "src.mcp_server.server:main"
