@@ -147,12 +147,24 @@ class CocciRetriever:
                 script_content = script_match.group(1).strip()
                 summary = msg.split('\n')[0]
                 
+                # Get the diff
+                try:
+                    diff_content = repo.git.show(commit.hexsha, pretty="", patch=True)
+                except Exception as e:
+                    print(f"Failed to get diff for {commit.hexsha}: {e}")
+                    diff_content = ""
+
                 content = f"""Intent: {summary}
 Reference Commit: {commit.hexsha}
 
 Coccinelle Script:
 ```cocci
 {script_content}
+```
+
+Commit Diff:
+```diff
+{diff_content}
 ```"""
                 docs.append(Document(
                     page_content=content,
