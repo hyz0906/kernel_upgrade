@@ -3,11 +3,11 @@ import sys
 from src.agent.graph import app
 
 def main():
-    if "OPENAI_API_KEY" not in os.environ:
-        print("Please set OPENAI_API_KEY environment variable.")
-        # For demonstration purposes, we might want to allow running without key if we had mocks,
-        # but for now we enforce it as the agent relies on LLM.
-        return
+    # if "OPENAI_API_KEY" not in os.environ:
+    #    print("Please set OPENAI_API_KEY environment variable.")
+    #    # For demonstration purposes, we might want to allow running without key if we had mocks,
+    #    # but for now we enforce it as the agent relies on LLM.
+    #    return
 
     if len(sys.argv) > 1:
         user_request = " ".join(sys.argv[1:])

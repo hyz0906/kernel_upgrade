@@ -10,3 +10,9 @@ class AgentState(TypedDict):
     iteration_count: int       # Counter to prevent infinite loops
     error_log: List[str]       # History of errors for refinement
     status: str                # Current status: "drafting", "validating", "fixing", "success", "failed"
+    
+    # DeepAgent specific fields
+    plan: Optional[str]        # The migration plan content (markdown)
+    context_data: Optional[str]# Information gathered by Explorer
+    current_file: Optional[str]# File currently being modified
+    unified_diff: Optional[str]# Final generated patch for the codebase

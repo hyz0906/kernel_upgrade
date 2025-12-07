@@ -9,7 +9,19 @@ import subprocess
 
 class CocciRetriever:
     def __init__(self, db_path: str = "./chroma_db"):
-        self.embeddings = OpenAIEmbeddings()
+        if "OPENAI_API_KEY" in os.environ:
+             self.embeddings = OpenAIEmbeddings()
+        else:
+             print("Warning: OPENAI_API_KEY not found. Using FakeEmbeddings.")
+             # Simple Fake Embeddings
+             from langchain_core.embeddings import Embeddings
+             class FakeEmbeddings(Embeddings):
+                 def embed_documents(self, texts: List[str]) -> List[List[float]]:
+                     return [[0.0] * 1536 for _ in texts]
+                 def embed_query(self, text: str) -> List[float]:
+                     return [0.0] * 1536
+             self.embeddings = FakeEmbeddings()
+
         self.vector_store = Chroma(
             collection_name="cocci_patterns",
             embedding_function=self.embeddings,

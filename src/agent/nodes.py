@@ -7,9 +7,13 @@ from src.agent.state import AgentState
 from src.rag.retriever import CocciRetriever
 from src.mcp_server.tools import run_spatch_syntax_check, run_spatch_dry_run
 
+from src.agent.state import AgentState
+from src.rag.retriever import CocciRetriever
+from src.mcp_server.tools import run_spatch_syntax_check, run_spatch_dry_run
+from src.agent.utils import get_llm
+
 # Initialize LLM
-# Note: Ensure OPENAI_API_KEY is set in the environment
-llm = ChatOpenAI(model="gpt-4o", temperature=0.2)
+llm = get_llm()
 
 # Initialize Retriever
 retriever = CocciRetriever()
