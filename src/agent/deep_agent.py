@@ -1,179 +1,61 @@
-from typing import Any, Dict
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from typing import Any, Dict, List
+from langchain_core.messages import BaseMessage
+from deepagents import create_deep_agent
 from src.agent.state import AgentState
-from src.mcp_server.tools import kernel_grep, read_window, list_tree, lookup_symbol_def
+from src.mcp_server.tools import kernel_grep, list_tree, read_window, lookup_symbol_def
 from src.agent.utils import get_llm
-import os
 
-# Initialize LLM
-llm = get_llm()
+def get_deep_agent_graph():
+    """
+    Creates and returns the compiled Deep Agent graph using the deepagents library.
+    """
+    # 1. Initialize LLM
+    llm = get_llm()
 
-def planner_node(state: AgentState) -> Dict[str, Any]:
-    """
-    Planner Node: Generates a migration plan based on the user request.
-    """
-    print("DeepAgent: Planning...")
-    
-    system_prompt = """You are a Senior Linux Kernel Architect.
-    Your goal is to create a detailed migration plan for a kernel update task.
-    
-    Task: {user_request}
-    
-    You have access to the following context (if any):
-    {retrieved_rules}
-    
-    Output a Markdown formatted plan (MIGRATION_PLAN.md).
-    Steps should include:
-    1. Identify files to search (Explorer).
-    2. Identify context to read (Explorer).
-    3. Specific code changes (Coder).
-    4. Verification steps.
-    """
-    
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        ("user", "Please generate the plan.")
-    ])
-    
-    # Format retrieved docs
-    retrieved_rules = ""
-    if state.get("retrieved_docs"):
-         retrieved_rules = "\n".join(str(d) for d in state["retrieved_docs"])
+    # 2. Define Tools
+    # Deep Agents need tools to explore and verify.
+    tools = [kernel_grep, list_tree, read_window, lookup_symbol_def]
 
-    chain = prompt | llm | StrOutputParser()
-    plan = chain.invoke({
-        "user_request": state["user_request"],
-        "retrieved_rules": retrieved_rules
-    })
-    
-    return {"plan": plan, "status": "planning"}
+    # 3. Create the Deep Agent
+    # create_deep_agent typically returns a compiled LangGraph application
+    # We map the tools and the model.
+    graph = create_deep_agent(
+        model=llm,
+        tools=tools,
+        # You might want to pass a specific system prompt or config here if supported
+        # agent_type="planner" # Example if there are variants
+    )
 
-def explorer_node(state: AgentState) -> Dict[str, Any]:
-    """
-    Explorer Node: Executes search and read operations to gather context.
-    Note: For simplicity, this node essentially asks the LLM "What should I look for?" 
-    and then executes those search commands (simulated or real).
-    """
-    print("DeepAgent: Exploring...")
-    
-    # 1. Ask LLM what to search for based on the Plan
-    plan = state["plan"]
-    
-    prompt_search = f"""
-    Based on the following plan, what specific 'kernel_grep' or 'list_tree' commands should I run to locate the relevant code?
-    Output ONLY a list of commands, one per line.
-    Supported commands:
-    - grep "pattern" "path"
-    - list "path"
-    - lookup "symbol" "path"
-    
-    Plan:
-    {plan}
-    """
-    
-    response = llm.invoke(prompt_search).content
-    commands = response.strip().split('\n')
-    
-    context_results = []
-    
-    # 2. Execute commands (Safe execution wrapper)
-    # Note: In a real agent, we might loop this. Here we do one pass.
-    root_dir = "/home/hyz0906/workspace/kernel_upgrade" # Assume workspace root
-    # Ideally should be dynamic found or passed.
-    
-    for cmd in commands:
-        cmd = cmd.strip()
-        result = ""
-        if cmd.startswith('grep '):
-            # Parse: grep "pattern" "path"
-            try:
-                parts = cmd.split('"')
-                if len(parts) >= 4:
-                    pattern = parts[1]
-                    path = parts[3]
-                    # Ensure path is relative and safe?
-                    full_path = os.path.join(root_dir, path.lstrip('/'))
-                    result = kernel_grep(pattern, full_path)
-            except Exception as e:
-                result = f"Error parsing cmd '{cmd}': {e}"
-                
-        elif cmd.startswith('list '):
-             try:
-                parts = cmd.split('"')
-                if len(parts) >= 2:
-                    path = parts[1]
-                    full_path = os.path.join(root_dir, path.lstrip('/'))
-                    result = list_tree(full_path)
-             except Exception as e:
-                result = f"Error parsing cmd '{cmd}': {e}"
+    return graph
 
-        elif cmd.startswith('lookup '):
-             try:
-                parts = cmd.split('"')
-                if len(parts) >= 4:
-                    symbol = parts[1]
-                    path = parts[3]
-                    full_path = os.path.join(root_dir, path.lstrip('/'))
-                    result = lookup_symbol_def(symbol, full_path)
-             except Exception as e:
-                result = f"Error parsing cmd '{cmd}': {e}"
+def deep_agent_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Wraps the Deep Agent graph execution within our main graph.
+    """
+    print("--- Invoking Deep Agent ---")
+    
+    # 1. Get the compiled graph
+    graph = get_deep_agent_graph()
+    
+    # 2. Prepare input for the deep agent
+    # It likely expects a list of messages or a specific input key.
+    # We'll pass the user request.
+    inputs = {"messages": [("user", state["user_request"])]}
+    
+    # 3. Invoke
+    # The output format depends on deepagents. Assuming it returns a dict with 'messages'.
+    result = graph.invoke(inputs)
+    
+    # 4. Extract result
+    # We might need to parse the last message content to update our state.
+    messages = result.get("messages", [])
+    if messages:
+        last_msg = messages[-1]
+        content = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
+        return {
+            "status": "success", 
+            "validation_output": "Deep Agent finished",
+            "patch_diff": content # Assuming the agent outputs the result/patch in the last message
+        }
         
-        if result:
-            context_results.append(f"CMD: {cmd}\nRESULT:\n{result}\n")
-    
-    # 3. If we found matches, maybe read some windows?
-    # Simple heuristic: If grep found matches, read the first match's window.
-    # (Enhancement logic)
-    
-    full_context = "\n".join(context_results)
-    
-    return {"context_data": full_context, "status": "exploring"}
-
-def coder_node(state: AgentState) -> Dict[str, Any]:
-    """
-    Coder Node: Generates the patch/code based on Plan and Context.
-    """
-    print("DeepAgent: Coding...")
-    
-    plan = state["plan"]
-    context = state["context_data"]
-    
-    prompt = f"""
-    You are a Linux Kernel Developer.
-    Execute the following plan using the provided context.
-    
-    Plan:
-    {plan}
-    
-    Context Data (Search Results):
-    {context}
-    
-    Task: Generate a Unified Diff (Patch) to apply the changes.
-    Output ONLY the diff.
-    """
-    
-    response = llm.invoke(prompt).content
-    
-    # Extract code block if wrapped
-    patch = response
-    if "```diff" in response:
-        patch = response.split("```diff")[1].split("```")[0].strip()
-    elif "```" in response:
-        patch = response.split("```")[1].split("```")[0].strip()
-        
-    return {"unified_diff": patch, "status": "coding"}
-
-def verifier_node(state: AgentState) -> Dict[str, Any]:
-    """
-    Verifier Node: Mocks the verification process.
-    """
-    print("DeepAgent: Verifying...")
-    # In real world: Apply patch -> Make modules -> Run tests
-    # Here: Just check if patch is not empty.
-    
-    patch = state.get("unified_diff", "")
-    if patch and "diff --git" in patch:
-        return {"status": "success"}
-    else:
-        return {"status": "failed", "error_log": ["No valid patch generated"]}
+    return {"status": "failed", "error_log": ["Deep Agent returned no messages"]}

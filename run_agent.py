@@ -12,7 +12,7 @@ def main():
     if len(sys.argv) > 1:
         user_request = " ".join(sys.argv[1:])
     else:
-        user_request = "Fix the usage of usb_alloc_urb. It now takes gfp_flags as the second argument, previously it took iso_packets."
+        user_request = "Plan a refactor for usb_alloc_urb to use gfp_flags."
     
     print(f"Running agent with request: {user_request}")
     

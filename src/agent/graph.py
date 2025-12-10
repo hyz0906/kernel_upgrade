@@ -9,10 +9,7 @@ from src.agent.nodes import (
 )
 
 from src.agent.deep_agent import (
-    planner_node,
-    explorer_node,
-    coder_node,
-    verifier_node as deep_verifier_node
+    deep_agent_node
 )
 
 def router(state: AgentState):
@@ -43,10 +40,12 @@ workflow.add_node("validator", validate_script)
 workflow.add_node("refiner", refine_script)
 
 # Add Nodes (DeepAgent)
-workflow.add_node("planner", planner_node)
-workflow.add_node("explorer", explorer_node)
-workflow.add_node("coder", coder_node)
-workflow.add_node("deep_verifier", deep_verifier_node)
+# We might typically use "planner" as a router or entry point, 
+# but if deep_agent_node handles everything, we can route directly to it.
+# However, the mode_router points to "planner". Let's simply alias "planner" to the deep node or add a pass-through.
+# Or better, let's just make the "planner" key point to our deep_agent_node if we want to preserve the router logic.
+workflow.add_node("planner", deep_agent_node) # Re-using the 'planner' name to satisfy the router for now
+workflow.add_node("deep_node", deep_agent_node) # Explicit name if needed
 
 # Add Edges
 workflow.set_entry_point("retrieve")
@@ -75,10 +74,8 @@ workflow.add_conditional_edges(
 workflow.add_edge("refiner", "validator")
 
 # DeepAgent Flow
-workflow.add_edge("planner", "explorer")
-workflow.add_edge("explorer", "coder")
-workflow.add_edge("coder", "deep_verifier")
-workflow.add_edge("deep_verifier", END)
+workflow.add_edge("planner", "deep_node")
+workflow.add_edge("deep_node", END)
 
 # Compile
 app = workflow.compile()
