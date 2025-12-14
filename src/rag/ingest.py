@@ -67,7 +67,7 @@ def ingest_data(kernel_dir: str, db_path: str):
     """
     print(f"Scanning {kernel_dir} for .cocci files...")
     
-    cocci_files = glob.glob(os.path.join(kernel_dir, 'scripts/coccinelle/**/*.cocci'), recursive=True)
+    cocci_files = glob.glob(os.path.join(kernel_dir, 'coccinelle/**/*.cocci'), recursive=True)
     print(f"Found {len(cocci_files)} .cocci files.")
     
     all_docs = []
@@ -82,18 +82,58 @@ def ingest_data(kernel_dir: str, db_path: str):
     # Often they are part of the coccinelle installation, not the kernel source.
     # But if the user provided them in the workspace, we check there.
     # For this implementation, we check the kernel_dir/scripts/coccinelle root.
-    standard_docs = parse_standard_files(os.path.join(kernel_dir, 'scripts/coccinelle'))
+    standard_docs = parse_standard_files(os.path.join(kernel_dir, 'coccinelle'))
     all_docs.extend(standard_docs)
-    
+    print(len(all_docs), len(standard_docs))
     if not all_docs:
         print("No documents found to ingest.")
         return
 
-    print(f"Ingesting {len(all_docs)} documents into ChromaDB at {db_path}...")
+    # Custom splitter since langchain_text_splitters is missing
+    class SimpleCharacterTextSplitter:
+        def __init__(self, chunk_size, chunk_overlap):
+            self.chunk_size = chunk_size
+            self.chunk_overlap = chunk_overlap
+        
+        def split_documents(self, documents):
+            new_docs = []
+            from langchain_core.documents import Document
+            for doc in documents:
+                text = doc.page_content
+                if not text:
+                    continue
+                start = 0
+                text_len = len(text)
+                chunk_index = 0
+                while start < text_len:
+                    end = min(start + self.chunk_size, text_len)
+                    chunk_text = text[start:end]
+                    
+                    metadata = doc.metadata.copy() if doc.metadata else {}
+                    metadata["chunk"] = chunk_index
+                    new_docs.append(Document(page_content=chunk_text, metadata=metadata))
+                    
+                    if end == text_len:
+                        break
+                    start += (self.chunk_size - self.chunk_overlap)
+                    chunk_index += 1
+            return new_docs
+
+    # Reduce chunk size further to 250 to be extremely safe against token limits
+    text_splitter = SimpleCharacterTextSplitter(
+        chunk_size=250,
+        chunk_overlap=50
+    )
+    
+    split_docs = text_splitter.split_documents(all_docs)
+    print(f"Split {len(all_docs)} documents into {len(split_docs)} chunks.")
+
+    print(f"Ingesting {len(split_docs)} documents into ChromaDB at {db_path}...")
     
     # Initialize Chroma
-    # Note: We use OpenAIEmbeddings by default, requires OPENAI_API_KEY env var.
-    embeddings = OpenAIEmbeddings()
+    # Note: We use Silicon Flow embeddings via get_embedding_model
+    from embeddings import get_embedding_model
+    embeddings = get_embedding_model()
     
     vector_store = Chroma(
         collection_name="cocci_patterns",
@@ -103,11 +143,20 @@ def ingest_data(kernel_dir: str, db_path: str):
     
     # Add documents
     # Process in batches to avoid hitting limits if any
-    batch_size = 100
-    for i in range(0, len(all_docs), batch_size):
-        batch = all_docs[i:i+batch_size]
-        vector_store.add_documents(batch)
-        print(f"Ingested batch {i//batch_size + 1}/{(len(all_docs)-1)//batch_size + 1}")
+    # Batch size limited to 32 by Silicon Flow API, reducing to 5 to avoid token totals
+    batch_size = 5
+    import time
+    for i in range(0, len(split_docs), batch_size):
+        batch = split_docs[i:i+batch_size]
+        try:
+            vector_store.add_documents(batch)
+            print(f"Ingested batch {i//batch_size + 1}/{(len(split_docs)-1)//batch_size + 1}")
+            # Sleep to avoid RPM limit (403)
+            time.sleep(1.2)
+        except Exception as e:
+            print(f"Error ingesting batch {i//batch_size + 1}: {e}")
+            # Try to continue or re-raise? For now, we print and continue best effort
+            pass
         
     print("Ingestion complete.")
 

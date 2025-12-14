@@ -9,17 +9,20 @@ import subprocess
 
 class CocciRetriever:
     def __init__(self, db_path: str = "./chroma_db"):
-        if "OPENAI_API_KEY" in os.environ:
-             self.embeddings = OpenAIEmbeddings()
-        else:
-             print("Warning: OPENAI_API_KEY not found. Using FakeEmbeddings.")
+        # Use Silicon Flow embeddings
+        from src.rag.embeddings import get_embedding_model
+        try:
+             self.embeddings = get_embedding_model()
+        except Exception as e:
+             print(f"Failed to initialize embeddings: {e}")
+             print("Falling back to FakeEmbeddings for testing/offline support.")
              # Simple Fake Embeddings
              from langchain_core.embeddings import Embeddings
              class FakeEmbeddings(Embeddings):
                  def embed_documents(self, texts: List[str]) -> List[List[float]]:
-                     return [[0.0] * 1536 for _ in texts]
+                     return [[0.0] * 1024 for _ in texts]
                  def embed_query(self, text: str) -> List[float]:
-                     return [0.0] * 1536
+                     return [0.0] * 1024
              self.embeddings = FakeEmbeddings()
 
         self.vector_store = Chroma(
@@ -80,8 +83,55 @@ class CocciRetriever:
         documents.extend(self._process_commits(kernel_dir))
         
         if documents:
-            print(f"Adding {len(documents)} documents to VectorDB...")
-            self.vector_store.add_documents(documents)
+            # Custom splitter since langchain_text_splitters is missing
+            class SimpleCharacterTextSplitter:
+                def __init__(self, chunk_size, chunk_overlap):
+                    self.chunk_size = chunk_size
+                    self.chunk_overlap = chunk_overlap
+                
+                def split_documents(self, documents):
+                    new_docs = []
+                    # Assuming Document is imported in outer scope
+                    for doc in documents:
+                        text = doc.page_content
+                        if not text:
+                            continue
+                        start = 0
+                        text_len = len(text)
+                        chunk_index = 0
+                        while start < text_len:
+                            end = min(start + self.chunk_size, text_len)
+                            chunk_text = text[start:end]
+                            
+                            metadata = doc.metadata.copy() if doc.metadata else {}
+                            metadata["chunk"] = chunk_index
+                            new_docs.append(Document(page_content=chunk_text, metadata=metadata))
+                            
+                            if end == text_len:
+                                break
+                            start += (self.chunk_size - self.chunk_overlap)
+                            chunk_index += 1
+                    return new_docs
+
+            text_splitter = SimpleCharacterTextSplitter(
+                chunk_size=250,
+                chunk_overlap=50
+            )
+            split_docs = text_splitter.split_documents(documents)
+            print(f"Split {len(documents)} documents into {len(split_docs)} chunks.")
+            
+            print(f"Adding {len(split_docs)} documents to VectorDB...")
+            # Batch size limited to 32 by Silicon Flow API, reducing to 5
+            batch_size = 5
+            import time
+            for i in range(0, len(split_docs), batch_size):
+                batch = split_docs[i:i+batch_size]
+                try:
+                    self.vector_store.add_documents(batch)
+                    print(f"Ingested batch {i//batch_size + 1}/{(len(split_docs)-1)//batch_size + 1}")
+                    time.sleep(1.2) # Avoid RPM limit
+                except Exception as e:
+                     print(f"Error ingesting batch: {e}")
             print("Ingestion complete.")
         else:
             print("No documents found to ingest.")
