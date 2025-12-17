@@ -2,27 +2,26 @@
 
 ## Overview
 
-The **Linux Kernel Semantic Patch Generator (LK-SPG) Agent** is an intelligent system designed to automate the creation of Coccinelle (SmPL) semantic patches. It leverages Large Language Models (LLMs) and Retrieval-Augmented Generation (RAG) to understand user requirements and generate precise, syntactically correct `.cocci` scripts for kernel refactoring and upgrades.
+The **Linux Kernel Semantic Patch Generator (LK-SPG) Agent** is an intelligent system designed to automate the creation of Coccinelle (SmPL) semantic patches. It uses a **Feasibility Analysis** phase to determine the best refactoring strategy:
+
+1.  **Coccinelle Strategy (Pattern-Based)**: For repetitive API changes, it uses a specialized subgraph to generate, validate, and test `.cocci` scripts.
+2.  **LLM Direct Strategy (One-off)**: For complex or non-structural changes, it falls back to a direct LLM-based refactoring agent.
 
 ## Features
 
--   **Intelligent Agent**: Built with [LangGraph](https://github.com/langchain-ai/langgraph), the agent follows a multi-step workflow:
-    1.  **Retrieve**: Fetches relevant Coccinelle syntax rules and historical examples from the knowledge base.
-    2.  **Draft**: Generates an initial `.cocci` script based on the user request and retrieved context.
-    3.  **Test Generation**: Creates a minimal reproducible C example to test the script.
-    4.  **Validation**: Runs `spatch` (Coccinelle) to verify syntax and dry-run the script against the mock C code.
-    5.  **Refinement**: Automatically fixes the script if validation fails.
--   **RAG Knowledge Base**:
-    -   **Syntax Rules**: Indexed from `standard.h`, `standard.iso`, and the Coccinelle manual.
-    -   **Historical Examples**: Indexed from git commit history, including the commit diffs for context.
--   **REST API**: A FastAPI-based server to expose the agent as a service.
--   **MCP Server**: Implements the Model Context Protocol for tool integration.
+-   **Intelligent Routing**: The `Feasibility Analysis` node analyzes the request to select the optimal strategy (`COCCI` vs `LLM_DIRECT`).
+-   **SPG Subgraph**: A dedicated LangGraph subgraph for Coccinelle workflows:
+    -   **RAG Retrieval**: Fetches syntax rules and historical patterns.
+    -   **Drafting**: Generates V1 script and mock C code.
+    -   **Granular Validation**: Separate **Syntax Check** and **Dry Run** nodes ensure correctness.
+    -   **Refinement Loop**: Automatically fixes scripts based on specific error feedback (syntax errors or logic mismatches).
+-   **Structured Tools**: Internal tools (spatch execution, grep, etc.) are exposed as LangChain `StructuredTool` objects for reliable agent invocation.
+-   **RAG Knowledge Base**: Indexes `standard.h`, `standard.iso`, and commit history.
 
 ## Prerequisites
 
 -   **Python**: 3.10 or higher.
--   **Coccinelle**: The `spatch` command line tool must be installed and available in your PATH.
-    -   Ubuntu/Debian: `sudo apt-get install coccinelle`
+-   **Coccinelle**: `spatch` must be installed (`sudo apt-get install coccinelle`).
 -   **Git**: Required for analyzing commit history.
 
 ## Installation
@@ -36,77 +35,42 @@ The **Linux Kernel Semantic Patch Generator (LK-SPG) Agent** is an intelligent s
 2.  Install dependencies:
     ```bash
     pip install .
-    # Or for development:
-    pip install -e .
     ```
 
-3.  Set up environment variables:
+3.  Set environment variables:
     ```bash
     export OPENAI_API_KEY="your-api-key"
     ```
 
 ## Usage
 
-### 1. Command Line Interface (CLI)
-
-You can run the agent directly from the command line:
+### Command Line
+Run the agent with a natural language request:
 
 ```bash
-python3 run_agent.py "Your request here"
+python3 run_agent.py "Fix the usage of usb_alloc_urb. It now takes gfp_flags as the second argument."
 ```
 
-Example:
-```bash
-python3 run_agent.py "Fix the usage of usb_alloc_urb. It now takes gfp_flags as the second argument, previously it took iso_packets."
-```
-
-### 2. REST API
-
-Start the API server:
-
+### REST API
+Start the server:
 ```bash
 python3 run_api.py
 ```
-
-The server will start at `http://0.0.0.0:8000`.
-
-**API Endpoints:**
-
--   `POST /agent/run`: Run the agent.
-    -   **Body**: `{"request": "Your request here"}`
-    -   **Response**: JSON containing the generated script, patch diff, and status.
--   `GET /health`: Health check.
-
-Example Request:
-```bash
-curl -X POST "http://localhost:8000/agent/run" \
-     -H "Content-Type: application/json" \
-     -d '{"request": "Replace foo(x) with bar(x, 0)"}'
-```
-
-### 3. Knowledge Base Ingestion
-
-To populate the RAG knowledge base, you can use the `ingest_knowledge` method in `src/rag/retriever.py`. (Note: A dedicated ingestion script can be added for convenience).
-
-### 4. MCP Server
-
-You can run the MCP server standalone:
-
-```bash
-python3 run_mcp_server.py
-```
-
-This uses the `mcp` library to run the server, which typically communicates over stdio for integration with MCP clients (like Claude Desktop or other agents).
+Endpoint: `POST /agent/run`
 
 ## Project Structure
 
--   `src/agent`: Contains the LangGraph agent logic (`graph.py`, `nodes.py`, `state.py`).
--   `src/rag`: RAG implementation (`retriever.py`).
--   `src/api`: FastAPI server (`server.py`).
--   `src/mcp_server`: MCP server tools (`tools.py`).
--   `system_prompt.md`: The system prompt used by the agent.
--   `pyproject.toml`: Project dependencies and configuration.
+-   `src/agent/`: LangGraph logic.
+    -   `graph.py`: Main graph and subgraph definitions.
+    -   `nodes.py`: Node implementations (Feasibility, SPG nodes, Validation).
+    -   `tools.py`: LangChain `StructuredTool` definitions.
+    -   `state.py`: State schemas (`AgentState`, `SpgState`).
+-   `src/mcp_server/`: Underlying tool implementations.
+    -   `tools.py`: Python functions for `spatch`, `grep`, etc.
+-   `src/rag/`: Knowledge retrieval logic.
+-   `feasibility_prompt.md`: System prompt for feasibility analysis.
+-   `subgraph.md`: Design doc for the SPG subgraph.
 
 ## Contributing
 
-Contributions are welcome! Please submit Pull Requests or open Issues for bugs and feature requests.
+Contributions are welcome! Please submit Pull Requests or open Issues.
