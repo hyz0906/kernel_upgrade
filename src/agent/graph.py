@@ -1,81 +1,127 @@
+from typing import Dict, Any, Literal
 from langgraph.graph import StateGraph, END
-from src.agent.state import AgentState
+from src.agent.state import AgentState, SpgState
 from src.agent.nodes import (
-    retrieve_knowledge,
-    draft_script,
-    generate_test_case,
-    validate_script,
-    refine_script
+    analyze_feasibility,
+    node_rag_retrieve,
+    node_architect_draft,
+    node_syntax_check,
+    node_dry_run,
+    node_refine_script,
+    node_apply_real,
+    llm_refactor_agent
 )
 
-from src.agent.deep_agent import (
-    deep_agent_node
-)
+# --- Define SPG Subgraph ---
+def check_syntax_router(state: SpgState) -> Literal["dry_run", "refine_script", "failed"]:
+    if state["status"] == "syntax_ok":
+        return "dry_run"
+    
+    if state["iteration_count"] >= 5: 
+        return "failed"
+        
+    return "refine_script"
 
-def router(state: AgentState):
-    """Decide next step based on validation result"""
-    if state['status'] == "success":
-        return END
-    if state['iteration_count'] > 5: # Safety break
-        print("Max iterations reached. Stopping.")
-        return END
-    return "refiner"
+def check_dry_run_router(state: SpgState) -> Literal["apply_real", "refine_script", "failed"]:
+    if state["status"] == "success":
+        return "apply_real"
+    
+    if state["iteration_count"] >= 5: 
+        return "failed"
+        
+    return "refine_script"
 
-def mode_router(state: AgentState):
-    """Decide whether to use Classic Agent or Deep Agent based on complexity or keyword"""
-    # Simple heuristic: if request contains "deep" or "refactor" or "context", go Deep.
-    req = state['user_request'].lower()
-    if "deep" in req or "refactor" in req or "plan" in req:
-        return "planner"
-    return "test_gen"
+spg_workflow = StateGraph(SpgState)
+spg_workflow.add_node("rag_retrieve", node_rag_retrieve)
+spg_workflow.add_node("architect_draft", node_architect_draft)
+spg_workflow.add_node("syntax_check", node_syntax_check)
+spg_workflow.add_node("dry_run", node_dry_run)
+spg_workflow.add_node("refine_script", node_refine_script)
+spg_workflow.add_node("apply_real", node_apply_real)
 
-# Initialize Graph
-workflow = StateGraph(AgentState)
+spg_workflow.set_entry_point("rag_retrieve")
+spg_workflow.add_edge("rag_retrieve", "architect_draft")
+spg_workflow.add_edge("architect_draft", "syntax_check")
 
-# Add Nodes (Classic)
-workflow.add_node("retrieve", retrieve_knowledge)
-workflow.add_node("architect", draft_script)
-workflow.add_node("test_gen", generate_test_case)
-workflow.add_node("validator", validate_script)
-workflow.add_node("refiner", refine_script)
-
-# Add Nodes (DeepAgent)
-# We might typically use "planner" as a router or entry point, 
-# but if deep_agent_node handles everything, we can route directly to it.
-# However, the mode_router points to "planner". Let's simply alias "planner" to the deep node or add a pass-through.
-# Or better, let's just make the "planner" key point to our deep_agent_node if we want to preserve the router logic.
-workflow.add_node("planner", deep_agent_node) # Re-using the 'planner' name to satisfy the router for now
-workflow.add_node("deep_node", deep_agent_node) # Explicit name if needed
-
-# Add Edges
-workflow.set_entry_point("retrieve")
-
-# Route after retrieval
-workflow.add_conditional_edges(
-    "retrieve",
-    mode_router,
+# Syntax Check Router
+spg_workflow.add_conditional_edges(
+    "syntax_check",
+    check_syntax_router,
     {
-        "test_gen": "test_gen",
-        "planner": "planner"
+        "dry_run": "dry_run",
+        "refine_script": "refine_script",
+        "failed": END
     }
 )
 
-# Classic Flow
-workflow.add_edge("test_gen", "architect")
-workflow.add_edge("architect", "validator")
-workflow.add_conditional_edges(
-    "validator", 
-    router, 
+# Dry Run Router
+spg_workflow.add_conditional_edges(
+    "dry_run",
+    check_dry_run_router,
     {
-        END: END,
-        "refiner": "refiner"
+        "apply_real": "apply_real",
+        "refine_script": "refine_script",
+        "failed": END
     }
 )
-workflow.add_edge("refiner", "validator")
 
-# DeepAgent Flow
-workflow.add_edge("planner", "deep_node")
-workflow.add_edge("deep_node", END)
+# Refine Loop
+spg_workflow.add_edge("refine_script", "syntax_check")
 
-# Compile
-app = workflow.compile()
+spg_workflow.add_edge("apply_real", END)
+spg_subgraph = spg_workflow.compile()
+
+
+# --- Wrapper for Subgraph Integration ---
+def spg_agent_wrapper(state: AgentState) -> Dict[str, Any]:
+    print(">>> Entering SPG Subgraph >>>")
+    
+    # Map AgentState to SpgState
+    # Note: target_files logic needs to be robust. 
+    # For now, we pass empty list if not found, node_apply_real handles it.
+    # Ideally, we'd extract this from feasibility_result or user_request.
+    subgraph_input = {
+        "task_description": state['user_request'],
+        "target_files": [], # TODO: Extract targets from analysis
+        "iteration_count": 0
+    }
+    
+    result = spg_subgraph.invoke(subgraph_input)
+    
+    return {
+        "spg_output": result,
+        "final_diff": result.get("applied_diff"),
+        "status": result.get("status")
+    }
+
+# --- Define Main Graph ---
+def strategy_router(state: AgentState) -> Literal["spg_agent", "llm_refactor"]:
+    strategy = state.get("strategy", "LLM_DIRECT")
+    if strategy == "COCCI":
+        return "spg_agent"
+    return "llm_refactor"
+
+main_workflow = StateGraph(AgentState)
+main_workflow.add_node("analyze_feasibility", analyze_feasibility)
+main_workflow.add_node("spg_agent", spg_agent_wrapper)
+main_workflow.add_node("llm_refactor", llm_refactor_agent)
+
+main_workflow.set_entry_point("analyze_feasibility")
+
+main_workflow.add_conditional_edges(
+    "analyze_feasibility",
+    strategy_router,
+    {
+        "spg_agent": "spg_agent",
+        "llm_refactor": "llm_refactor"
+    }
+)
+
+main_workflow.add_edge("spg_agent", END)
+main_workflow.add_edge("llm_refactor", END)
+
+app = main_workflow.compile()
+
+# For testing compilation
+if __name__ == "__main__":
+    print("Graph compiled successfully.")
