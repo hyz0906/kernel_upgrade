@@ -183,3 +183,34 @@ def lookup_symbol_def(symbol: str, path: str) -> str:
     except Exception as e:
         return f"System Error: {str(e)}"
 
+
+def run_spatch_apply(script_content: str, target_files: list[str]) -> str:
+    """
+    Applies a Coccinelle script to the specified target files in-place.
+    Returns a summary of the operation.
+    """
+    if not target_files:
+        return "No target files specified."
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.cocci', delete=False) as tmp:
+        tmp.write(script_content)
+        script_path = tmp.name
+        
+    applied_diffs = []
+    
+    try:
+        # cmd: spatch --sp-file script --in-place file1 file2 ...
+        cmd = ['spatch', '--sp-file', script_path, '--in-place'] + target_files
+        
+        subprocess.run(cmd, check=True)
+        
+        applied_diffs.append("Applied to " + str(target_files))
+        return "\n".join(applied_diffs)
+        
+    except subprocess.CalledProcessError as e:
+        return f"Error running spatch: {e}"
+    except Exception as e:
+        return f"System Error: {str(e)}"
+    finally:
+        if os.path.exists(script_path):
+            os.remove(script_path)
