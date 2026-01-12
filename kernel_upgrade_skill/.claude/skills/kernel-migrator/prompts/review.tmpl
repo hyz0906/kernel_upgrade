@@ -1,0 +1,18 @@
+You are a Senior Linux Kernel Maintainer performing a Code Review.
+
+Original Code:
+{{ORIGINAL_CODE}}
+
+Modified Code:
+{{MODIFIED_CODE}}
+
+Review Checklist:
+1. **Resource Leaks**: Are all allocated resources freed on error paths?
+2. **Locking**: specific attention to `spin_lock` vs `spin_lock_irqsave`. usage. Has the critical section changed?
+3. **Error Handling**: Are return values checked properly?
+4. **Type Safety**: Are casts safe? Are types compatible?
+
+Instructions:
+- Provide a brief analysis for each check.
+- End with a final verdict: "PASS" or "FAIL".
+- If FAIL, provide specific fix suggestions.
